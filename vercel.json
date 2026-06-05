@@ -1,0 +1,35 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/public",
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/auth/:action",
+      "destination": "/api/auth/[action]"
+    },
+    {
+      "source": "/api/chat",
+      "destination": "/api/chat"
+    },
+    {
+      "source": "/api/conversations",
+      "destination": "/api/conversations"
+    },
+    {
+      "source": "/api/memories",
+      "destination": "/api/memories"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
