@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import { motion, AnimatePresence } from "framer-motion";
+import SkillsPlaza from "@/pages/SkillsPlaza";
 import {
   Area,
   Bar,
@@ -88,72 +89,6 @@ const navigationItems = [
   { label: "Model", icon: Cpu },
   { label: "Setting", icon: Settings },
 ];
-
-const SKILL_CATEGORIES = ["Foundation", "Design", "Work & study"] as const;
-type SkillCategory = typeof SKILL_CATEGORIES[number];
-
-const SKILLS_DATA: Record<SkillCategory, { name: string; desc: string }[]> = {
-  Foundation: [
-    { name: "Deep Researcher", desc: "Research any topic with AI-powered depth" },
-    { name: "Text Summarizer", desc: "Condense long documents into key points" },
-    { name: "Data Analyst", desc: "Interpret and visualize your datasets" },
-    { name: "Language Tutor", desc: "Practice conversation in any language" },
-    { name: "Writing Coach", desc: "Polish prose and improve clarity" },
-    { name: "Brainstorm Pro", desc: "Generate ideas and expand creative thinking" },
-  ],
-  Design: [
-    { name: "UI Critiquer", desc: "Get expert feedback on your interface" },
-    { name: "Color Palette", desc: "Create harmonious brand color systems" },
-    { name: "Copy Writer", desc: "Write compelling marketing copy fast" },
-    { name: "Logo Concept", desc: "Describe and iterate on logo ideas" },
-    { name: "Style Guide Gen", desc: "Build consistent design token libraries" },
-    { name: "Accessibility Check", desc: "Audit designs for inclusive standards" },
-  ],
-  "Work & study": [
-    { name: "Meeting Notes", desc: "Summarize transcripts into action items" },
-    { name: "Email Composer", desc: "Draft professional emails in seconds" },
-    { name: "Study Flashcards", desc: "Turn notes into spaced-repetition cards" },
-    { name: "Code Reviewer", desc: "Get detailed feedback on your code" },
-    { name: "Presentation Deck", desc: "Build slide outlines from any topic" },
-    { name: "Task Planner", desc: "Break big goals into actionable steps" },
-  ],
-};
-
-const SKILL_HERO_SLIDES = [
-  {
-    tag: "@Canva",
-    eyebrow: "Visual workflow",
-    title: "Design faster with visual AI workflows",
-    description: "Turn rough ideas into polished visual drafts, presentation frames, and content layouts with guided creative skills.",
-    action: "View",
-    prompt: "/Skills build a campaign moodboard",
-    icon: ImageIcon,
-    steps: ["Read creative brief", "Generate visual directions", "Prepare reusable layouts"],
-    resultText: "A polished moodboard with palette, copy angles, and presentation-ready frames.",
-  },
-  {
-    tag: "@Data",
-    eyebrow: "Analysis workflow",
-    title: "Turn messy files into clear insight",
-    description: "Clean tables, compare patterns, generate charts, and summarize findings without rebuilding the same workflow each time.",
-    action: "View",
-    prompt: "/Skills analyze this spreadsheet",
-    icon: Database,
-    steps: ["Clean imported columns", "Compare key segments", "Summarize chart-ready insights"],
-    resultText: "A compact analysis brief with trends, outliers, and next-step recommendations.",
-  },
-  {
-    tag: "@Study",
-    eyebrow: "Writing workflow",
-    title: "Draft, polish, and learn with structure",
-    description: "Use focused skills for summaries, writing reviews, study notes, and step-by-step project plans.",
-    action: "View",
-    prompt: "/Skills turn notes into a plan",
-    icon: FileText,
-    steps: ["Extract important notes", "Organize structure", "Draft a clear action plan"],
-    resultText: "A focused study or writing plan with sections, priorities, and follow-up prompts.",
-  },
-] as const;
 
 const MODEL_PROVIDERS = ["All models", "Claude", "ChatGPT", "Deepseek"] as const;
 type ModelProviderTab = typeof MODEL_PROVIDERS[number];
@@ -382,9 +317,6 @@ export const Box = (): JSX.Element => {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
   const [view, setView] = useState<"home" | "chat" | "skills" | "usage" | "models" | "settings">("home");
-  const [skillsTab, setSkillsTab] = useState<SkillCategory>("Foundation");
-  const [skillsSearch, setSkillsSearch] = useState("");
-  const [activeSkillHeroIndex, setActiveSkillHeroIndex] = useState(0);
   const [modelProviderTab, setModelProviderTab] = useState<ModelProviderTab>("All models");
   const [modelSearch, setModelSearch] = useState("");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
@@ -446,7 +378,6 @@ export const Box = (): JSX.Element => {
   const touchScrollStartYRef = useRef<number | null>(null);
   const startXRef = useRef(0);
   const startWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
-  const skillHeroDragStartRef = useRef<number | null>(null);
 
   const collapsed = sidebarWidth < 160;
   const activeChat = sessions.find((s) => s.id === activeChatId) ?? null;
@@ -458,8 +389,6 @@ export const Box = (): JSX.Element => {
   const modelMenuModels = modelHistoryIds
     .map((id) => MODEL_CATALOG.find((model) => model.id === id))
     .filter((model): model is typeof MODEL_CATALOG[number] => Boolean(model));
-  const activeSkillHeroSlide = SKILL_HERO_SLIDES[activeSkillHeroIndex];
-  const ActiveSkillHeroIcon = activeSkillHeroSlide.icon;
   const currentUserId = authUser?.id ?? CURRENT_USER_ID;
   const sessionsStorageKey = `sapienda:${currentUserId}:sessions`;
   const activeChatStorageKey = `sapienda:${currentUserId}:activeChatId`;
@@ -1286,18 +1215,6 @@ export const Box = (): JSX.Element => {
   const applyModel = (model: typeof MODEL_CATALOG[number]) => {
     setSelectedModel(model);
     setModelHistoryIds((prev) => [model.id, ...prev.filter((id) => id !== model.id)].slice(0, 3));
-  };
-
-  const changeSkillHeroSlide = (direction: 1 | -1) => {
-    setActiveSkillHeroIndex((index) => (index + direction + SKILL_HERO_SLIDES.length) % SKILL_HERO_SLIDES.length);
-  };
-
-  const finishSkillHeroDrag = (clientX: number) => {
-    if (skillHeroDragStartRef.current === null) return;
-    const delta = clientX - skillHeroDragStartRef.current;
-    skillHeroDragStartRef.current = null;
-    if (Math.abs(delta) < 36) return;
-    changeSkillHeroSlide(delta < 0 ? 1 : -1);
   };
 
   const renderSwitch = (checked: boolean, onChange: (next: boolean) => void) => (
@@ -3163,224 +3080,7 @@ export const Box = (): JSX.Element => {
           )}
 
           {/* SKILLS VIEW */}
-          {view === "skills" && (
-            <motion.div
-              key="skills"
-              className="flex flex-1 flex-col overflow-y-auto"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-            >
-              <div className="mx-auto w-full max-w-[1220px] px-6 py-10 lg:px-12">
-
-                {/* Header */}
-                <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                  <div>
-                    <h1 className="[font-family:'EB_Garamond',Georgia,serif] text-[48px] font-normal text-[#373734] leading-tight">Skills</h1>
-                    <p className="[font-family:'Inter',Helvetica] text-[15px] text-[#9c9b97] mt-1.5">Chat with your favorite skills in Sapienda</p>
-                  </div>
-                  <div className="flex w-full items-center gap-2.5 rounded-full border border-[#e2e2df] bg-white px-5 py-3 shadow-sm md:w-auto">
-                    <Search size={15} strokeWidth={1.8} className="text-[#9c9b97]" />
-                    <input
-                      type="text"
-                      placeholder="Search skills"
-                      value={skillsSearch}
-                      onChange={(e) => setSkillsSearch(e.target.value)}
-                      data-testid="input-search-skills"
-                      className="w-full bg-transparent [font-family:'Inter',Helvetica] text-[14px] text-[#373734] placeholder:text-[#b5b4ae] outline-none md:w-[200px]"
-                    />
-                  </div>
-                </div>
-
-                {/* Hero carousel */}
-                <motion.div
-                  className="relative mb-8 w-full max-w-none overflow-hidden rounded-2xl border border-white/50 p-5 shadow-[0_14px_36px_rgba(55,55,52,0.10)] lg:min-h-[440px]"
-                  style={{
-                    backgroundImage:
-                      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E\"), linear-gradient(135deg, #7A42D8 0%, #C9B4F2 48%, #FFF2BC 100%)",
-                    backgroundBlendMode: "soft-light, normal",
-                  }}
-                  initial={{ opacity: 0, y: 18 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.45, ease: "easeOut" }}
-                  onMouseDown={(event) => { skillHeroDragStartRef.current = event.clientX; }}
-                  onMouseUp={(event) => finishSkillHeroDrag(event.clientX)}
-                  onMouseLeave={(event) => finishSkillHeroDrag(event.clientX)}
-                  onTouchStart={(event) => { skillHeroDragStartRef.current = event.touches[0]?.clientX ?? null; }}
-                  onTouchEnd={(event) => finishSkillHeroDrag(event.changedTouches[0]?.clientX ?? 0)}
-                >
-                  <div className="pointer-events-none absolute inset-0 bg-white/10 backdrop-blur-[1px]" />
-                  <div className="relative z-10 flex min-h-0 flex-col gap-5 lg:min-h-[360px]">
-                    <AnimatePresence mode="wait">
-                      <motion.div
-                        key={activeSkillHeroSlide.title}
-                        className="grid min-w-0 flex-1 gap-5 lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)]"
-                        initial={{ opacity: 0, x: 34 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -34 }}
-                        transition={{ duration: 0.34, ease: "easeOut" }}
-                      >
-                        <div className="flex min-w-0 max-w-[420px] flex-col justify-between">
-                          <button
-                            type="button"
-                            className="mb-3 rounded-full border border-white/40 bg-white/30 px-3 py-1 [font-family:'Inter',Helvetica] text-[11px] font-semibold text-[#373734] shadow-sm backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-[#c4b0fd] hover:bg-white/40"
-                          >
-                            {activeSkillHeroSlide.tag}
-                          </button>
-                          <p className="[font-family:'Inter',Helvetica] text-[10px] font-semibold uppercase tracking-[0.22em] text-[#373734]/70">{activeSkillHeroSlide.eyebrow}</p>
-                          <h2 className="mt-2 [font-family:'EB_Garamond',Georgia,serif] text-[30px] font-semibold leading-[1.04] text-[#262622]">
-                            {activeSkillHeroSlide.title}
-                          </h2>
-                          <p className="mt-3 max-w-[340px] [font-family:'Inter',Helvetica] text-[13px] leading-relaxed text-[#373734]/75">
-                            {activeSkillHeroSlide.description}
-                          </p>
-                          <button
-                            type="button"
-                            className="mt-4 rounded-full bg-[#191918] px-5 py-2.5 [font-family:'Inter',Helvetica] text-[13px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-gradient-to-r hover:from-[#191918] hover:to-[#5f2fc2] hover:shadow-[0_10px_20px_rgba(95,47,194,0.20)]"
-                          >
-                            {activeSkillHeroSlide.action}
-                          </button>
-                        </div>
-
-                        <div className="min-w-0 rounded-2xl border border-white/35 bg-white/24 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.28)] backdrop-blur-md">
-                          <div className="flex items-center gap-2.5 rounded-xl bg-white/72 px-3 py-2.5 shadow-sm">
-                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#373734]">
-                              <ActiveSkillHeroIcon size={13} strokeWidth={1.8} className="text-white" />
-                            </div>
-                            <span className="min-w-0 flex-1 truncate [font-family:'Inter',Helvetica] text-[12px] font-medium text-[#373734]">{activeSkillHeroSlide.prompt}</span>
-                            <ArrowUp size={13} strokeWidth={2.2} className="text-[#a682fe]" />
-                          </div>
-                          <div className="mt-3 rounded-2xl border border-white/40 bg-white/42 p-3 shadow-sm backdrop-blur-sm">
-                            <div className="mb-3 flex items-center justify-between">
-                              <p className="[font-family:'Inter',Helvetica] text-[10px] font-semibold uppercase tracking-[0.16em] text-[#6f6e69]">Skill workflow</p>
-                              <span className="rounded-full bg-[#ede9fe] px-2 py-0.5 [font-family:'Inter',Helvetica] text-[10px] font-semibold text-[#7A42D8]">3 steps</span>
-                            </div>
-                            <div className="flex flex-col gap-2">
-                              {activeSkillHeroSlide.steps.map((step, index) => (
-                                <div key={step} className="flex items-start gap-2.5">
-                                  <div className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[#7A42D8] shadow-sm">
-                                    <span className="[font-family:'Inter',Helvetica] text-[10px] font-semibold">{index + 1}</span>
-                                    {index < activeSkillHeroSlide.steps.length - 1 && <span className="absolute left-1/2 top-6 h-4 w-px -translate-x-1/2 bg-white/70" />}
-                                  </div>
-                                  <div className="min-w-0 flex-1 rounded-xl border border-white/40 bg-white/45 px-3 py-2">
-                                    <p className="[font-family:'Inter',Helvetica] text-[12px] font-semibold text-[#373734]">{step}</p>
-                                    <p className="mt-0.5 line-clamp-1 [font-family:'Inter',Helvetica] text-[10px] leading-relaxed text-[#6f6e69]">
-                                      Guided by Sapienda with reusable prompts and structured outputs.
-                                    </p>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="mt-3 rounded-xl border border-white/40 bg-white/50 px-3 py-2.5 backdrop-blur-sm">
-                            <div className="mb-1.5 flex items-center gap-2 text-[#7A42D8]">
-                              <Check size={12} strokeWidth={2.2} />
-                              <span className="[font-family:'Inter',Helvetica] text-[11px] font-semibold">Result preview</span>
-                            </div>
-                            <p className="line-clamp-2 [font-family:'Inter',Helvetica] text-[11px] leading-relaxed text-[#4b4b48]">
-                              {activeSkillHeroSlide.resultText}
-                            </p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    </AnimatePresence>
-                  </div>
-
-                  <div className="relative z-10 mt-4 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {SKILL_HERO_SLIDES.map((slide, index) => (
-                        <button
-                          key={slide.title}
-                          type="button"
-                          aria-label={`Show ${slide.title}`}
-                          onClick={() => setActiveSkillHeroIndex(index)}
-                          className={`h-2 rounded-full transition-all ${activeSkillHeroIndex === index ? "w-6 bg-[#7A42D8]" : "w-2 bg-white/70 hover:bg-white"}`}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button type="button" onClick={() => changeSkillHeroSlide(-1)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/55 text-[#373734] shadow-sm backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white">
-                        <ChevronDown size={15} className="rotate-90" />
-                      </button>
-                      <button type="button" onClick={() => changeSkillHeroSlide(1)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/55 text-[#373734] shadow-sm backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white">
-                        <ChevronDown size={15} className="-rotate-90" />
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-
-                {/* Category tabs */}
-                <div className="flex items-center gap-8 mb-6">
-                  {SKILL_CATEGORIES.map((cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      data-testid={`skills-tab-${cat.toLowerCase().replace(/\s/g, "-")}`}
-                      onClick={() => setSkillsTab(cat)}
-                      className={`relative [font-family:'Inter',Helvetica] text-[15px] transition-colors pb-1.5 ${
-                        skillsTab === cat
-                          ? "font-medium text-[#373734]"
-                          : "font-normal text-[#9c9b97] hover:text-[#4b4b48]"
-                      }`}
-                    >
-                      {cat}
-                      {skillsTab === cat && (
-                        <motion.span
-                          layoutId="tab-underline"
-                          className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#373734] rounded-full"
-                          transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                        />
-                      )}
-                    </button>
-                  ))}
-                  <button type="button" className="[font-family:'Inter',Helvetica] text-[15px] font-normal text-[#373734] hover:text-[#a682fe] transition-colors ml-auto">
-                    View more →
-                  </button>
-                </div>
-
-                {/* Skills grid */}
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={skillsTab + skillsSearch}
-                    className="grid grid-cols-2 gap-x-10 gap-y-0"
-                    initial="hidden"
-                    animate="visible"
-                    exit="hidden"
-                    variants={{
-                      hidden: {},
-                      visible: { transition: { staggerChildren: 0.045 } },
-                    }}
-                  >
-                    {SKILLS_DATA[skillsTab]
-                      .filter((s) => !skillsSearch || s.name.toLowerCase().includes(skillsSearch.toLowerCase()) || s.desc.toLowerCase().includes(skillsSearch.toLowerCase()))
-                      .map((skill) => (
-                        <motion.button
-                          key={skill.name}
-                          type="button"
-                          data-testid={`skill-card-${skill.name.toLowerCase().replace(/\s/g, "-")}`}
-                          className="flex items-center gap-5 px-0 py-5 text-left hover:bg-[#f5f5f3] hover:px-4 transition-all group rounded-xl"
-                          variants={{
-                            hidden: { opacity: 0, y: 10 },
-                            visible: { opacity: 1, y: 0, transition: { duration: 0.22, ease: "easeOut" } },
-                          }}
-                        >
-                          <div className="h-12 w-12 shrink-0 rounded-full bg-[#ebebea] flex items-center justify-center group-hover:bg-[#ede9fe] transition-colors">
-                            <Zap size={18} strokeWidth={1.6} className="text-[#9c9b97] group-hover:text-[#a682fe] transition-colors" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="[font-family:'Inter',Helvetica] text-[15px] font-medium text-[#373734] truncate">{skill.name}</p>
-                            <p className="[font-family:'Inter',Helvetica] text-[13px] text-[#9c9b97] truncate mt-0.5">{skill.desc}</p>
-                          </div>
-                          <ChevronRight size={16} strokeWidth={1.8} className="shrink-0 text-[#c0bfba] group-hover:text-[#a682fe] transition-colors" />
-                        </motion.button>
-                      ))}
-                  </motion.div>
-                </AnimatePresence>
-
-              </div>
-            </motion.div>
-          )}
+          {view === "skills" && <SkillsPlaza onNavigateToChat={(skill) => { setView("chat"); }} />}
 
         </AnimatePresence>
       </section>
