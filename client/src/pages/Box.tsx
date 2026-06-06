@@ -295,7 +295,8 @@ type MessagePart =
     }
   | { type: "file"; name: string; fileType: string; size: string; description: string; url: string }
   | { type: "table"; columns: string[]; rows: string[][] }
-  | { type: "image"; src: string; alt: string; title?: string };
+  | { type: "image"; src: string; alt: string; title?: string }
+  | { type: "source"; title: string; url: string; description?: string };
 
 interface Message {
   id: string;
@@ -979,6 +980,7 @@ export const Box = (): JSX.Element => {
     text: string,
     modelSnapshot: ModelCatalogItem,
     filesSnapshot: AttachedFile[],
+    contextSnapshot: Array<{ role: "user" | "assistant"; content: string }>,
   ) => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -996,6 +998,7 @@ export const Box = (): JSX.Element => {
           model: modelSnapshot.id,
           memoryEnabled,
           webSearchEnabled,
+          contextMessages: contextSnapshot,
           attachments: filesSnapshot.map((file) => ({ name: file.name, size: file.size })),
         }),
         credentials: "include",
@@ -1138,6 +1141,24 @@ export const Box = (): JSX.Element => {
     };
     const title = text.slice(0, 22) + (text.length > 22 ? "..." : "");
     let targetSessionId = activeChatId;
+    const contextSnapshot = [
+      ...(activeChat?.messages ?? []),
+      userMsg,
+    ]
+      .filter((message) => message.status !== "error" && message.role !== "assistant" || Boolean((message.content ?? "").trim() || message.parts.length))
+      .map((message) => ({
+        role: message.role,
+        content: message.parts.map((part) => {
+          if (part.type === "text") return part.text;
+          if (part.type === "code") return part.code;
+          if (part.type === "table") return [part.columns.join("\t"), ...part.rows.map((row) => row.join("\t"))].join("\n");
+          if (part.type === "file") return `${part.name} ${part.description}`;
+          if (part.type === "source") return `${part.title} ${part.url}`;
+          return message.content ?? "";
+        }).filter(Boolean).join("\n\n") || message.content || "",
+      }))
+      .filter((message) => message.content.trim())
+      .slice(-16);
 
     if (view === "home" || !targetSessionId) {
       let serverSession: ChatSession;
@@ -1159,7 +1180,7 @@ export const Box = (): JSX.Element => {
     setAttachedFiles([]);
     setCreditNotice(null);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    if (targetSessionId) void streamAssistantResponse(targetSessionId, assistantMsg.id, text, modelSnapshot, filesSnapshot);
+    if (targetSessionId) void streamAssistantResponse(targetSessionId, assistantMsg.id, text, modelSnapshot, filesSnapshot, contextSnapshot);
   };
 
   const stopGeneration = () => abortControllerRef.current?.abort();
@@ -1169,6 +1190,7 @@ export const Box = (): JSX.Element => {
       if (part.type === "text") return part.text;
       if (part.type === "code") return part.code;
       if (part.type === "file") return `${part.name} - ${part.url}`;
+      if (part.type === "source") return `${part.title} - ${part.url}`;
       if (part.type === "table") return [part.columns.join("\t"), ...part.rows.map((row) => row.join("\t"))].join("\n");
       return "";
     }).filter(Boolean).join("\n\n");
@@ -1326,7 +1348,15 @@ export const Box = (): JSX.Element => {
     };
     setSessions((prev) => prev.map((session) => session.id === activeChat.id ? { ...session, messages: [...session.messages, assistantMsg], updatedAt: new Date(now).toISOString() } : session));
     setCreditNotice(null);
-    void streamAssistantResponse(activeChat.id, assistantMsg.id, lastUserText, modelSnapshot, []);
+    const contextSnapshot = [...activeChat.messages, assistantMsg]
+      .filter((message) => message.status !== "error")
+      .map((message) => ({
+        role: message.role,
+        content: getMessagePlainText(message),
+      }))
+      .filter((message) => message.content.trim())
+      .slice(-16);
+    void streamAssistantResponse(activeChat.id, assistantMsg.id, lastUserText, modelSnapshot, [], contextSnapshot);
   };
 
   const startNewChat = () => {
@@ -1977,6 +2007,26 @@ export const Box = (): JSX.Element => {
     if (part.type === "table") {
       return renderMarkdownTable(part.columns, part.rows, index);
     }
+    if (part.type === "source") {
+      return (
+        <a
+          key={index}
+          href={part.url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-3 flex items-start gap-3 rounded-2xl border border-[#d7d7d4] bg-white p-4 shadow-sm hover:border-[#c4b0fd]"
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#f5f5f3] text-[#8c8b86]">
+            <Globe size={16} />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate [font-family:'Inter',Helvetica] text-[13px] font-semibold text-[#373734]">{part.title}</p>
+            {part.description && <p className="mt-1 line-clamp-2 [font-family:'Inter',Helvetica] text-[12px] leading-relaxed text-[#8c8b86]">{part.description}</p>}
+            <p className="mt-1 truncate [font-family:'Inter',Helvetica] text-[11px] text-[#a682fe]">{part.url}</p>
+          </div>
+        </a>
+      );
+    }
     return (
       <div key={index} className="mt-4 rounded-2xl border border-[#d7d7d4] bg-white p-4">
         <div className="mb-2 flex items-center gap-2 text-[#8c8b86]"><ImageIcon size={15} />{part.title ?? part.alt}</div>
@@ -1996,14 +2046,23 @@ export const Box = (): JSX.Element => {
     </div>
   );
 
-  const updateMemory = async (id: string, action: "activate" | "deactivate" | "dismiss" | "delete" | "update", content?: string) => {
+  const updateMemory = async (id: string, action: "activate" | "deactivate" | "dismiss" | "delete" | "update", content?: string, messageId?: string) => {
+    if (action === "dismiss" && messageId && activeChatId) {
+      updateAssistantMessage(activeChatId, messageId, { memorySuggestion: undefined });
+    }
+    if (action === "activate" && messageId && activeChatId) {
+      setMemories((prev) => prev.map((memory) => memory.id === id ? { ...memory, status: "active", updatedAt: new Date().toISOString() } : memory));
+    }
     const response = await fetch("/api/memories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ id, action, content }),
     });
-    if (!response.ok) return;
+    if (!response.ok) {
+      if (action === "dismiss") void fetchMemories();
+      return;
+    }
     const payload = await response.json() as { memories?: MemoryItem[] };
     if (Array.isArray(payload.memories)) setMemories(payload.memories);
   };
@@ -2037,14 +2096,14 @@ export const Box = (): JSX.Element => {
         <div className="mt-3 flex gap-2">
           <button
             type="button"
-            onClick={() => updateMemory(message.memorySuggestion!.id, "activate")}
+            onClick={() => updateMemory(message.memorySuggestion!.id, "activate", undefined, message.id)}
             className="rounded-full bg-[#373734] px-3 py-1.5 [font-family:'Inter',Helvetica] text-[12px] font-medium text-white hover:bg-[#5f3fd3]"
           >
             Save memory
           </button>
           <button
             type="button"
-            onClick={() => updateMemory(message.memorySuggestion!.id, "dismiss")}
+            onClick={() => updateMemory(message.memorySuggestion!.id, "dismiss", undefined, message.id)}
             className="rounded-full px-3 py-1.5 [font-family:'Inter',Helvetica] text-[12px] text-[#8c8b86] hover:bg-[#f0f0ee] hover:text-[#373734]"
           >
             Dismiss

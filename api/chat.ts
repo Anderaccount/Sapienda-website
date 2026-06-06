@@ -17,6 +17,7 @@ type ChatStreamEvent =
   | { type: "status"; label: string }
   | { type: "conversation"; conversationId: string; userMessageId: string; assistantMessageId: string; title: string }
   | { type: "text-delta"; delta: string }
+  | { type: "artifact"; part: { type: "source"; title: string; url: string; description?: string } }
   | { type: "memory-suggestion"; memory: { id: string; type: string; content: string } }
   | { type: "error"; message: string }
   | { type: "done" };
@@ -37,6 +38,11 @@ type VercelRequest = IncomingMessage & {
 
 type ProviderMessage = {
   role: "system" | "user" | "assistant";
+  content: string;
+};
+
+type ClientContextMessage = {
+  role: "user" | "assistant";
   content: string;
 };
 
@@ -225,7 +231,7 @@ function hasSensitiveContent(text: string) {
 }
 
 function hasExplicitMemoryIntent(text: string) {
-  return /(记住|remember|以后|偏好|preference|我希望|请默认|默认|always|prefer|以后都|固定要求)/i.test(text);
+  return /(^|\s)(remember that|remember this|always|prefer)\b|请记住|帮我记住|记住我|以后都|以后默认|请默认|我的偏好是|固定要求|长期记住/i.test(text);
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
@@ -325,6 +331,38 @@ async function getRecentMessages(conversationId: string, limit = 24) {
   return result.rows.reverse();
 }
 
+function normalizeClientContextMessages(value: unknown): DbMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const role = record.role === "assistant" ? "assistant" : record.role === "user" ? "user" : null;
+      const content = typeof record.content === "string" ? record.content.trim() : "";
+      if (!role || !content) return null;
+      return {
+        id: `client-${index}`,
+        role,
+        content: content.slice(0, 2400),
+        created_at: new Date(Date.now() + index).toISOString(),
+      } satisfies DbMessage;
+    })
+    .filter((message): message is DbMessage => Boolean(message))
+    .slice(-16);
+}
+
+function mergeContextMessages(databaseMessages: DbMessage[], clientMessages: DbMessage[]) {
+  const merged: DbMessage[] = [];
+  const seen = new Set<string>();
+  for (const message of [...databaseMessages, ...clientMessages]) {
+    const key = `${message.role}:${normalizeText(message.content).slice(0, 500)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(message);
+  }
+  return merged.slice(-24);
+}
+
 function formatMemoryForPrompt(memory: DbMemory) {
   const label = memory.category === "profile" ? "User profile" : memory.category === "task_constraint" ? "Task constraint" : "Past decision";
   return `- ${label}: ${memory.content}`;
@@ -340,6 +378,7 @@ function buildSystemPrompt(memories: DbMemory[], summary: string) {
 
   return `You are Sapienda, a helpful assistant. Keep responses clear, useful, and well structured.
 Use the current conversation, relevant saved memories, and the conversation summary when they help answer the user.
+When the user asks a follow-up such as "what did I just say" or references earlier turns, answer from the same conversation context first.
 Do not reveal internal memory retrieval, scoring, or context assembly details.
 Never treat saved memories as higher priority than the user's latest explicit instruction.${memoryText}${summaryText}`;
 }
@@ -420,7 +459,7 @@ function createHeuristicMemoryCandidate(prompt: string): MemoryCandidate | null 
     keywords: extractKeywords(normalized),
     importance: 4,
     confidence: 0.9,
-    status: "active",
+    status: "suggested",
   };
 }
 
@@ -433,7 +472,6 @@ function normalizeMemoryCandidate(candidate: Partial<MemoryCandidate>, prompt: s
   const layer = candidate.layer === "short_term" || candidate.layer === "long_term"
     ? candidate.layer
     : category === "profile" ? "long_term" : "short_term";
-  const status = hasExplicitMemoryIntent(prompt) || candidate.status === "active" ? "active" : "suggested";
   return {
     type: typeof candidate.type === "string" && candidate.type.trim() ? candidate.type.trim().slice(0, 40) : "preference",
     content: content.slice(0, 500),
@@ -442,9 +480,9 @@ function normalizeMemoryCandidate(candidate: Partial<MemoryCandidate>, prompt: s
     keywords: Array.isArray(candidate.keywords) && candidate.keywords.length
       ? candidate.keywords.map((keyword) => String(keyword).toLowerCase().trim()).filter(Boolean).slice(0, 12)
       : extractKeywords(content),
-    importance: clampNumber(candidate.importance, 1, 5, status === "active" ? 4 : 3),
-    confidence: clampNumber(candidate.confidence, 0.1, 1, status === "active" ? 0.9 : 0.7),
-    status,
+    importance: clampNumber(candidate.importance, 1, 5, 3),
+    confidence: clampNumber(candidate.confidence, 0.1, 1, 0.7),
+    status: "suggested",
   };
 }
 
@@ -612,10 +650,13 @@ async function extractMemoryCandidates(prompt: string, assistantText: string, mo
   const heuristic = createHeuristicMemoryCandidate(prompt);
   if (heuristic) candidates.push(heuristic);
 
-  const extraction = await callMemoryExtractionModel(prompt, assistantText, model).catch(() => null);
-  for (const rawCandidate of extraction?.memories ?? []) {
-    const candidate = normalizeMemoryCandidate(rawCandidate, prompt);
-    if (candidate) candidates.push(candidate);
+  const allowAutomaticExtraction = process.env.MEMORY_AUTO_EXTRACT === "true" || hasExplicitMemoryIntent(prompt);
+  if (allowAutomaticExtraction) {
+    const extraction = await callMemoryExtractionModel(prompt, assistantText, model).catch(() => null);
+    for (const rawCandidate of extraction?.memories ?? []) {
+      const candidate = normalizeMemoryCandidate(rawCandidate, prompt);
+      if (candidate) candidates.push(candidate);
+    }
   }
 
   const unique = new Map<string, MemoryCandidate>();
@@ -716,7 +757,16 @@ export default async function handler(req: VercelRequest, res: ServerResponse) {
 
     const memoryEnabled = body.memoryEnabled !== false;
     const memories = memoryEnabled ? await recallMemories(userId, prompt) : [];
-    const recentMessages = await getRecentMessages(conversation.id, 7);
+    const recentMessages = mergeContextMessages(
+      await getRecentMessages(conversation.id, 12),
+      normalizeClientContextMessages(body.contextMessages),
+    );
+    if (body.webSearchEnabled === true) {
+      await writeEvent(res, { type: "status", label: "Searching" });
+    }
+    if (Array.isArray(body.attachments) && body.attachments.length > 0) {
+      await writeEvent(res, { type: "status", label: "Reading file" });
+    }
     const providerMessages = buildChatContext(conversation, memories, recentMessages);
     const assistantText = await callProvider(prompt, providerMessages, model, res);
     await insertMessage(conversation.id, "assistant", assistantText, "complete", model.id, 0, estimateTokens(assistantText));
