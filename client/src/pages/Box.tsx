@@ -3080,7 +3080,7 @@ export const Box = (): JSX.Element => {
           )}
 
           {/* SKILLS VIEW */}
-          {view === "skills" && <SkillsPlaza onNavigateToChat={(skill) => { setView("chat"); }} />}
+          {view === "skills" && <SkillsPlaza authUser={authUser} onNavigateToChat={(skill) => { setView("chat"); }} />}
 
         </AnimatePresence>
       </section>

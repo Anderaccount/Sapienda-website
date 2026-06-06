@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import UploadSkillModal from "@/components/UploadSkillModal";
 import {
   Plus,
   Search,
@@ -405,13 +406,16 @@ function BadgeChip({ children, color }: { children: string; color: string }) {
 
 interface SkillsPlazaProps {
   onNavigateToChat?: (skill: Skill) => void;
+  authUser?: { id: string } | null;
 }
 
-export default function SkillsPlaza({ onNavigateToChat }: SkillsPlazaProps) {
+export default function SkillsPlaza({ onNavigateToChat, authUser }: SkillsPlazaProps) {
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<CategoryId>("Foundation");
   const [detailSkill, setDetailSkill] = useState<Skill | null>(null);
   const [detailTab, setDetailTab] = useState<"about" | "try" | "reviews">("about");
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadPending, setUploadPending] = useState(false);
 
   /* Playground state */
   const [playgroundInput, setPlaygroundInput] = useState("");
@@ -431,6 +435,26 @@ export default function SkillsPlaza({ onNavigateToChat }: SkillsPlazaProps) {
       return next;
     });
   }, []);
+
+  /* ── Upload ── */
+  const handleUploadClick = useCallback(() => {
+    if (!authUser?.id) {
+      setUploadPending(true);
+      // Trigger login — the parent (Box) handles it
+      return;
+    }
+    setUploadOpen(true);
+  }, [authUser]);
+
+  /* When authUser becomes available after login, open modal if pending */
+  const prevAuthRef = useRef<string | undefined>(authUser?.id);
+  if (authUser?.id && !prevAuthRef.current && uploadPending) {
+    prevAuthRef.current = authUser.id;
+    setUploadPending(false);
+    setUploadOpen(true);
+  } else {
+    prevAuthRef.current = authUser?.id ?? undefined;
+  }
 
   /* ── Filtering ── */
   const filtered = useMemo(() => {
@@ -572,6 +596,7 @@ export default function SkillsPlaza({ onNavigateToChat }: SkillsPlazaProps) {
             </div>
             <button
               type="button"
+              onClick={handleUploadClick}
               className="inline-flex items-center gap-2 rounded-full bg-[#191918] px-5 py-3 font-['Inter',Helvetica] text-[14px] font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-gradient-to-r hover:from-[#191918] hover:to-[#5f2fc2] hover:shadow-[0_10px_20px_rgba(95,47,194,0.15)]"
             >
               <Upload size={15} strokeWidth={1.8} />
@@ -579,6 +604,18 @@ export default function SkillsPlaza({ onNavigateToChat }: SkillsPlazaProps) {
             </button>
           </div>
         </div>
+
+        {/* ── Upload modal ── */}
+        <UploadSkillModal
+          open={uploadOpen}
+          onClose={() => setUploadOpen(false)}
+          onSuccess={(skill) => {
+            // Could refresh the skill list from API here
+            console.log("Skill published:", skill);
+          }}
+          categories={CATEGORIES.map((c) => c.id)}
+          userId={authUser?.id ?? null}
+        />
 
         {/* ── Featured cards ── */}
         <div className="mb-10 grid grid-cols-1 gap-5 sm:grid-cols-3">
