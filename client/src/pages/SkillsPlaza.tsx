@@ -647,9 +647,6 @@ export default function SkillsPlaza({ onNavigateToChat }: SkillsPlazaProps) {
               }`}
             >
               {cat.id}
-              <span className="ml-1.5 text-[11px] text-[#b5b4ae]">
-                ({SKILLS.filter((s) => s.category === cat.id).length})
-              </span>
               {activeTab === cat.id && (
                 <motion.span
                   layoutId="skills-tab-underline"

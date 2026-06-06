@@ -69,3 +69,61 @@ export const insertUserSchema = createInsertSchema(users).pick({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+/* ─────────────────────────────────────────────
+   Skills
+   ───────────────────────────────────────────── */
+
+export const skills = pgTable("skills", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  authorId: varchar("author_id").notNull().default("system"),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  category: text("category").notNull(),
+  systemPrompt: text("system_prompt").notNull().default(""),
+  examples: text("examples").array().notNull().default(sql`ARRAY[]::text[]`),
+  tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  icon: text("icon").notNull().default("Sparkles"),
+  iconColor: text("icon_color").notNull().default("#7A42D8"),
+  badge: text("badge"),
+  status: text("status").notNull().default("published"), // published | pending | hidden
+  starCount: integer("star_count").notNull().default(0),
+  downloadCount: integer("download_count").notNull().default(0),
+  rating: numeric("rating", { precision: 3, scale: 2 }).notNull().default("0"),
+  reviewCount: integer("review_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const skillStars = pgTable("skill_stars", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  skillId: varchar("skill_id").notNull().references(() => skills.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const skillComments = pgTable("skill_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  skillId: varchar("skill_id").notNull().references(() => skills.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  rating: integer("rating").notNull().default(5), // 1-5
+  helpfulCount: integer("helpful_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertSkillSchema = createInsertSchema(skills).pick({
+  name: true,
+  description: true,
+  category: true,
+  systemPrompt: true,
+  examples: true,
+  tags: true,
+  icon: true,
+  iconColor: true,
+});
+
+export type InsertSkill = z.infer<typeof insertSkillSchema>;
+export type Skill = typeof skills.$inferSelect;
+export type SkillStar = typeof skillStars.$inferSelect;
+export type SkillComment = typeof skillComments.$inferSelect;

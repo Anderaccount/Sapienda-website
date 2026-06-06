@@ -16,6 +16,10 @@
       "destination": "/api/chat"
     },
     {
+      "source": "/api/skills(.*)",
+      "destination": "/api/skills"
+    },
+    {
       "source": "/api/conversations",
       "destination": "/api/conversations"
     },
