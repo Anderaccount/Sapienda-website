@@ -1,7 +1,8 @@
-import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import { motion, AnimatePresence } from "framer-motion";
+import SkillsPlaza from "@/pages/SkillsPlaza";
 import {
   Area,
   Bar,
@@ -66,7 +67,6 @@ const DEFAULT_SIDEBAR_WIDTH = 264;
 const KATEX_VERSION = "0.16.22";
 const KATEX_CSS_URL = `https://cdn.jsdelivr.net/npm/katex@${KATEX_VERSION}/dist/katex.min.css`;
 const KATEX_JS_URL = `https://cdn.jsdelivr.net/npm/katex@${KATEX_VERSION}/dist/katex.min.js`;
-const SkillsPlaza = lazy(() => import("@/pages/SkillsPlaza"));
 
 declare global {
   interface Window {
@@ -3080,17 +3080,7 @@ export const Box = (): JSX.Element => {
           )}
 
           {/* SKILLS VIEW */}
-          {view === "skills" && (
-            <Suspense
-              fallback={
-                <section className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#f7f7f4] text-[14px] text-[#6f6e69]">
-                  Loading skills...
-                </section>
-              }
-            >
-              <SkillsPlaza authUser={authUser} onNavigateToChat={(skill) => { setView("chat"); }} />
-            </Suspense>
-          )}
+          {view === "skills" && <SkillsPlaza authUser={authUser} onNavigateToChat={(skill) => { setView("chat"); }} />}
 
         </AnimatePresence>
       </section>

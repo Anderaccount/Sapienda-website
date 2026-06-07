@@ -1,10 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import type { ModelConfig } from "../shared/api/contracts";
-import { getProviderApiKey, getProviderModelId, getRelayChatUrl, resolveModel } from "../shared/api/models";
-import { getPool } from "./_lib/db";
-import { formatError, readJsonBody, writeEvent } from "./_lib/http";
-import { getUserId } from "./_lib/auth";
-import { extractKeywords, normalizeText } from "./_lib/text";
+import { createHmac, timingSafeEqual } from "crypto";
+import { Pool } from "pg";
+
+type ModelProvider = "Claude" | "ChatGPT" | "Deepseek";
+
+type ModelConfig = {
+  id: string;
+  name: string;
+  provider: ModelProvider;
+  envKeyName: string;
+  providerModelId: string;
+  providerModelEnvName: string;
+};
+
+type ChatStreamEvent =
+  | { type: "status"; label: string }
+  | { type: "conversation"; conversationId: string; userMessageId: string; assistantMessageId: string; title: string }
+  | { type: "text-delta"; delta: string }
+  | { type: "artifact"; part: { type: "source"; title: string; url: string; description?: string } }
+  | { type: "memory-suggestion"; memory: { id: string; type: string; content: string } }
+  | { type: "error"; message: string }
+  | { type: "done" };
 
 type StreamChunk = {
   choices?: Array<{
@@ -16,7 +32,9 @@ type StreamChunk = {
   usage?: unknown;
 };
 
-type VercelRequest = IncomingMessage & { body?: unknown };
+type VercelRequest = IncomingMessage & {
+  body?: unknown;
+};
 
 type ProviderMessage = {
   role: "system" | "user" | "assistant";
@@ -69,8 +87,103 @@ type MemoryExtractionResponse = {
   memories?: Array<Partial<MemoryCandidate>>;
 };
 
+const MODEL_CATALOG: ModelConfig[] = [
+  { id: "claude-opus-4-8", name: "Claude opus 4.8", provider: "Claude", envKeyName: "MODEL_RELAY_CLAUDE_API_KEY", providerModelId: "claude-opus-4-8", providerModelEnvName: "MODEL_ID_CLAUDE_OPUS_4_8" },
+  { id: "claude-opus-4-5", name: "Claude opus 4.5", provider: "Claude", envKeyName: "MODEL_RELAY_CLAUDE_API_KEY", providerModelId: "claude-opus-4-5-20251101", providerModelEnvName: "MODEL_ID_CLAUDE_OPUS_4_5" },
+  { id: "chatgpt-5-5", name: "ChatGPT 5.5", provider: "ChatGPT", envKeyName: "MODEL_RELAY_GPT_API_KEY", providerModelId: "gpt-5.5", providerModelEnvName: "MODEL_ID_GPT_5_5" },
+  { id: "chatgpt-5-4", name: "ChatGPT 5.4", provider: "ChatGPT", envKeyName: "MODEL_RELAY_GPT_API_KEY", providerModelId: "gpt-5.4", providerModelEnvName: "MODEL_ID_GPT_5_4" },
+  { id: "deepseek-v4-pro", name: "Deepseek V4 Pro", provider: "Deepseek", envKeyName: "DEEPSEEK_API_KEY", providerModelId: "deepseek-v4-pro", providerModelEnvName: "MODEL_ID_DEEPSEEK_V4_PRO" },
+  { id: "deepseek-v4-flash", name: "Deepseek V4 flash", provider: "Deepseek", envKeyName: "DEEPSEEK_API_KEY", providerModelId: "deepseek-v4-flash", providerModelEnvName: "MODEL_ID_DEEPSEEK_V4_FLASH" },
+];
+
+const SESSION_COOKIE_NAME = "sapienda_session";
 const DEFAULT_CONTEXT_TOKEN_BUDGET = 6000;
 const DEFAULT_MEMORY_RECALL_LIMIT = 5;
+let pool: Pool | null = null;
+
+function getPool() {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) throw new Error("DATABASE_URL is not configured.");
+  if (!pool) {
+    pool = new Pool({ connectionString: databaseUrl, max: 1, ssl: { rejectUnauthorized: false } });
+  }
+  return pool;
+}
+
+function resolveModel(modelId: unknown) {
+  if (typeof modelId !== "string") return MODEL_CATALOG[0];
+  return MODEL_CATALOG.find((model) => model.id === modelId) ?? MODEL_CATALOG[0];
+}
+
+function getProviderApiKey(model: ModelConfig) {
+  if (model.provider === "Deepseek") return process.env.DEEPSEEK_API_KEY?.trim() ?? "";
+  return process.env[model.envKeyName]?.trim() || process.env.MODEL_RELAY_API_KEY?.trim() || "";
+}
+
+function getProviderModelId(model: ModelConfig) {
+  return process.env[model.providerModelEnvName]?.trim() || model.providerModelId;
+}
+
+function getRelayChatUrl() {
+  const baseUrl = process.env.MODEL_RELAY_BASE_URL?.trim().replace(/\/+$/, "");
+  if (!baseUrl) return "";
+  if (baseUrl.endsWith("/chat/completions")) return baseUrl;
+  if (baseUrl.endsWith("/v1")) return `${baseUrl}/chat/completions`;
+  return `${baseUrl}/v1/chat/completions`;
+}
+
+function formatError(error: unknown) {
+  if (!(error instanceof Error)) return "Unknown server error";
+  const cause = error.cause as { code?: string; message?: string } | undefined;
+  return [error.message, cause?.code ? `Network code: ${cause.code}` : "", cause?.message && cause.message !== error.message ? cause.message : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseCookies(req: IncomingMessage) {
+  const header = req.headers.cookie ?? "";
+  return Object.fromEntries(header.split(";").map((item) => {
+    const [key, ...value] = item.trim().split("=");
+    return [key, decodeURIComponent(value.join("="))];
+  }).filter(([key]) => Boolean(key)));
+}
+
+function verifySession(token: string) {
+  const [header, payload, signature] = token.split(".");
+  if (!header || !payload || !signature) return null;
+  const secret = process.env.JWT_SECRET?.trim();
+  if (!secret) throw new Error("JWT_SECRET is not configured.");
+  const expected = createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
+  const actual = Buffer.from(signature);
+  const wanted = Buffer.from(expected);
+  if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) return null;
+  const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: string; exp?: number };
+  if (!parsed.sub || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) return null;
+  return parsed.sub;
+}
+
+function getUserId(req: IncomingMessage) {
+  const token = parseCookies(req)[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  return verifySession(token);
+}
+
+async function readJsonBody(req: VercelRequest) {
+  if (req.body && typeof req.body === "object") return req.body as Record<string, unknown>;
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return {};
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+async function writeEvent(res: ServerResponse, event: ChatStreamEvent) {
+  res.write(`${JSON.stringify(event)}\n`);
+}
 
 function estimateTokens(text: string) {
   return Math.max(1, Math.ceil(text.trim().length / 4));
@@ -93,6 +206,24 @@ function getContextTokenBudget() {
 function getMemoryRecallLimit() {
   const raw = Number(process.env.MEMORY_RECALL_LIMIT);
   return Number.isFinite(raw) && raw > 0 ? Math.min(12, Math.floor(raw)) : DEFAULT_MEMORY_RECALL_LIMIT;
+}
+
+function normalizeText(text: string) {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function extractKeywords(text: string) {
+  const normalized = normalizeText(text);
+  const latinWords = normalized.match(/[a-z0-9][a-z0-9_-]{2,}/g) ?? [];
+  const cjkWords = normalized.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
+  const stopWords = new Set([
+    "the", "and", "for", "with", "this", "that", "what", "how", "can", "you", "your",
+    "我想", "请你", "帮我", "这个", "那个", "一下", "可以", "需要", "默认",
+  ]);
+  return Array.from(new Set([...latinWords, ...cjkWords]
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 2 && !stopWords.has(word))))
+    .slice(0, 16);
 }
 
 function hasSensitiveContent(text: string) {

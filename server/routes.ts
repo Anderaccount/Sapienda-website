@@ -1,11 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import authHandler from "../api/auth/[action]";
-import chatHandler from "../api/chat";
-import conversationsHandler from "../api/conversations";
-import memoriesHandler from "../api/memories";
-import skillsHandler from "../api/skills";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -482,14 +477,6 @@ export async function registerRoutes(
       },
     });
   });
-
-  // Local Express development uses the same serverless handlers as Vercel so
-  // auth, database, memory, skills, and streaming chat behavior stay aligned.
-  app.all("/api/chat", chatHandler);
-  app.all("/api/conversations", conversationsHandler);
-  app.all("/api/memories", memoriesHandler);
-  app.all(/^\/api\/auth\/[^/]+$/, authHandler);
-  app.all(/^\/api\/skills(?:\/.*)?$/, skillsHandler);
 
   app.post("/api/chat", async (req, res) => {
     const prompt = typeof req.body?.message === "string" ? req.body.message : "";

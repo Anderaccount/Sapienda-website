@@ -1,9 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import type { MemoryDTO } from "../shared/api/contracts";
-import { getUserId } from "./_lib/auth";
-import { getPool } from "./_lib/db";
-import { readJsonBody, sendJson } from "./_lib/http";
-import { extractKeywords } from "./_lib/text";
+import { createHmac, timingSafeEqual } from "crypto";
+import { Pool } from "pg";
 
 type ApiRequest = IncomingMessage & { body?: unknown };
 type DbMemory = {
@@ -26,7 +23,69 @@ type DbMemory = {
   updated_at: string;
 };
 
-function mapMemory(row: DbMemory): MemoryDTO {
+const SESSION_COOKIE_NAME = "sapienda_session";
+let pool: Pool | null = null;
+
+function getPool() {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) throw new Error("DATABASE_URL is not configured.");
+  if (!pool) {
+    pool = new Pool({ connectionString: databaseUrl, max: 1, ssl: { rejectUnauthorized: false } });
+  }
+  return pool;
+}
+
+function sendJson(res: ServerResponse, statusCode: number, body: unknown) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+}
+
+function parseCookies(req: IncomingMessage) {
+  const header = req.headers.cookie ?? "";
+  return Object.fromEntries(header.split(";").map((item) => {
+    const [key, ...value] = item.trim().split("=");
+    return [key, decodeURIComponent(value.join("="))];
+  }).filter(([key]) => Boolean(key)));
+}
+
+function verifySession(token: string) {
+  const [header, payload, signature] = token.split(".");
+  if (!header || !payload || !signature) return null;
+  const secret = process.env.JWT_SECRET?.trim();
+  if (!secret) throw new Error("JWT_SECRET is not configured.");
+  const expected = createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
+  const actual = Buffer.from(signature);
+  const wanted = Buffer.from(expected);
+  if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) return null;
+  const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: string; exp?: number };
+  if (!parsed.sub || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) return null;
+  return parsed.sub;
+}
+
+function getUserId(req: IncomingMessage) {
+  const token = parseCookies(req)[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  return verifySession(token);
+}
+
+async function readJsonBody(req: ApiRequest) {
+  if (req.body && typeof req.body === "object") return req.body as Record<string, unknown>;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+function extractKeywords(text: string) {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const latinWords = normalized.match(/[a-z0-9][a-z0-9_-]{2,}/g) ?? [];
+  const cjkWords = normalized.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
+  return Array.from(new Set([...latinWords, ...cjkWords])).slice(0, 12);
+}
+
+function mapMemory(row: DbMemory) {
   return {
     id: row.id,
     type: row.type,
