@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "crypto";
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "crypto";
 import { promisify } from "util";
-import { Pool } from "pg";
+import { clearSessionCookie, parseCookies, setSessionCookie, signSession, verifySession } from "../_lib/auth";
+import { getPool } from "../_lib/db";
+import { readJsonBody, sendJson } from "../_lib/http";
 
 type AuthAction = "register" | "login" | "me" | "logout";
 type AuthRequest = IncomingMessage & { body?: unknown };
@@ -17,29 +19,7 @@ type DbUser = {
 };
 
 const SESSION_COOKIE_NAME = "sapienda_session";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const scrypt = promisify(scryptCallback);
-
-let pool: Pool | null = null;
-
-function getPool() {
-  const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) throw new Error("DATABASE_URL is not configured.");
-  if (!pool) {
-    pool = new Pool({
-      connectionString: databaseUrl,
-      max: 1,
-      ssl: { rejectUnauthorized: false },
-    });
-  }
-  return pool;
-}
-
-function sendJson(res: ServerResponse, statusCode: number, body: unknown) {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
 
 function publicUser(user: DbUser) {
   return {
@@ -49,67 +29,6 @@ function publicUser(user: DbUser) {
     creditBalanceCents: user.credit_balance_cents,
     plan: user.plan,
   };
-}
-
-function getJwtSecret() {
-  const secret = process.env.JWT_SECRET?.trim();
-  if (!secret) throw new Error("JWT_SECRET is not configured.");
-  return secret;
-}
-
-function base64Url(input: Buffer | string) {
-  return Buffer.from(input).toString("base64url");
-}
-
-function signSession(userId: string) {
-  const header = base64Url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const payload = base64Url(JSON.stringify({
-    sub: userId,
-    exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
-  }));
-  const signature = createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest("base64url");
-  return `${header}.${payload}.${signature}`;
-}
-
-function verifySession(token: string) {
-  const [header, payload, signature] = token.split(".");
-  if (!header || !payload || !signature) return null;
-  const expected = createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest("base64url");
-  const actual = Buffer.from(signature);
-  const wanted = Buffer.from(expected);
-  if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) return null;
-  const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: string; exp?: number };
-  if (!parsed.sub || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) return null;
-  return parsed.sub;
-}
-
-function parseCookies(req: IncomingMessage) {
-  const header = req.headers.cookie ?? "";
-  return Object.fromEntries(header.split(";").map((item) => {
-    const [key, ...value] = item.trim().split("=");
-    return [key, decodeURIComponent(value.join("="))];
-  }).filter(([key]) => Boolean(key)));
-}
-
-function setSessionCookie(res: ServerResponse, token: string) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${secure}`);
-}
-
-function clearSessionCookie(res: ServerResponse) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
-}
-
-async function readJsonBody(req: AuthRequest) {
-  if (req.body && typeof req.body === "object") return req.body as Record<string, unknown>;
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (!raw) return {};
-  return JSON.parse(raw) as Record<string, unknown>;
 }
 
 async function hashPassword(password: string) {

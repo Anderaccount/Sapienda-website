@@ -1,5 +1,5 @@
 {
-  "name": "rest-express",
+  "name": "sapienda",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
@@ -8,6 +8,7 @@
     "build": "node script/build.mjs",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "test": "tsx --test api/_lib/*.test.ts shared/api/*.test.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
