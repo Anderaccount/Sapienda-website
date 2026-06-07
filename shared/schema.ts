@@ -80,6 +80,7 @@ export const skills = pgTable("skills", {
   name: text("name").notNull(),
   description: text("description").notNull(),
   category: text("category").notNull(),
+  repoUrl: text("repo_url"),
   systemPrompt: text("system_prompt").notNull().default(""),
   examples: text("examples").array().notNull().default(sql`ARRAY[]::text[]`),
   tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),

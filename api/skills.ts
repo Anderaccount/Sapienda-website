@@ -211,6 +211,7 @@ export default async function handler(req: ApiRequest, res: ServerResponse) {
         name,
         description,
         category,
+        repoUrl,
         systemPrompt = "",
         examples = [],
         tags = [],
@@ -223,15 +224,26 @@ export default async function handler(req: ApiRequest, res: ServerResponse) {
         return;
       }
 
+      /* Validate repo URL if provided */
+      const repoUrlStr = typeof repoUrl === "string" ? repoUrl.trim() : "";
+      if (repoUrlStr) {
+        const ghMatch = repoUrlStr.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)/);
+        if (!ghMatch) {
+          sendJson(res, 400, { error: "repoUrl must be a valid GitHub repository URL" });
+          return;
+        }
+      }
+
       const result = await db.query(
-        `INSERT INTO "skills" ("author_id", "name", "description", "category", "system_prompt", "examples", "tags", "icon", "icon_color", "status")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'published')
+        `INSERT INTO "skills" ("author_id", "name", "description", "category", "repo_url", "system_prompt", "examples", "tags", "icon", "icon_color", "status")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'published')
          RETURNING *`,
         [
           userId,
           name,
           description,
           category,
+          repoUrlStr || null,
           systemPrompt,
           Array.isArray(examples) ? examples : [],
           Array.isArray(tags) ? tags : [],
